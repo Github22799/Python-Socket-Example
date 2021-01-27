@@ -16,10 +16,10 @@ class Connection:
         self.encoding = encoding
 
     def receive(self, length):
-        return self.connection.receive(length).decode(self.encoding)
+        return self.connection.recv(length).decode(self.encoding)
 
     def sendWithoutEncoding(self, message):
-        return self.connection.send(message)
+        return self.connection.send(message, )
 
     def send(self, message):
         return self.sendWithoutEncoding(message.encode(self.encoding))
@@ -55,6 +55,9 @@ class Logger:
 
     def log_connecting(self, addr):
         self.log(f'[CONNECTING] address: {addr}')
+
+    def log_connected(self, addr):
+        self.log(f'[CONNECTED] address: {addr}')
 
 
 class ReceiverCommon(threading.Thread):
@@ -120,7 +123,7 @@ class VariableLengthSender(SenderCommon):
         message_length_str = self.pad_encoded_message(message_length_str, HEADER_SIZE)
 
         connection.sendWithoutEncoding(message_length_str)
-        connection.send(message)
+        connection.send(message, )
 
 
 class FixedLengthSender(SenderCommon):
@@ -130,7 +133,7 @@ class FixedLengthSender(SenderCommon):
 
     def send(self, message, connection):
         self.validate_message_length(len(message), self.message_length)
-        connection.send(message)
+        connection.send(message, )
 
 
 class SocketCommon:
@@ -141,28 +144,23 @@ class SocketCommon:
         self.logger = logger
         self.sender = sender(self.logger)
 
-    def send(self, message, connection):
-        self.logger.log_send(message, connection)
-        self.sender.send(message, connection)
-
 
 class Server(SocketCommon):
 
     # TODO count for the case when a fixed length receiver is used.
     # TODO you might consider using a receiver factory.
     def __init__(self, receiver_func, receiver=VariableLengthReceiver):
-        super().__init__(receiver_func)
+        super().__init__()
         self.connections = []
         self.receivers = []
         self.receiver_func = receiver_func
         self.addr = (socket.gethostname(), SERVER_PORT)
         self.socket.bind(self.addr)
-        self.receiver = receiver    # Storing just the class, not an instance
+        self.receiver = receiver  # Storing just the class, not an instance
 
     def listen(self):
         self.logger.log_listening(self.addr)
         self.socket.listen()
-        self.accept_connections()
 
     def startReceivingThread(self, connection):
         receiver = self.receiver(connection, self.logger, self.receiver_func)
@@ -185,6 +183,10 @@ class Server(SocketCommon):
         while True:
             self.accept_connection()
 
+    def send(self, message, connection):
+        self.logger.log_send(message, connection)
+        self.sender.send(message, connection)
+
     def exit(self):
         for receiver in self.receivers:
             receiver.join()
@@ -192,9 +194,24 @@ class Server(SocketCommon):
 
 
 class Client(SocketCommon):
-    def __init__(self, address, port):
+    def __init__(self, hostname, port):
         super().__init__()
-        self.address = address
-        self.port = port
-        self.socket.connect((address, port))
-        self.logger.log_connecting((address, port))
+        address = (hostname, port)
+        self.connection = Connection(self.socket, hostname, port)
+        self.logger.log_connecting(self.connection)
+        self.socket.connect(address)
+        self.logger.log_connected(self.connection)
+
+    def send(self, message):
+        self.logger.log_send(message, self.connection)
+        self.sender.send(message, self.connection)
+
+
+def run_test_server():
+    server = Server(print)
+    server.accept_connections()
+
+
+def get_test_client():
+    client = Client(socket.gethostname(), SERVER_PORT)
+    return client
